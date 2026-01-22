@@ -1,0 +1,373 @@
+{
+  "name": "AI Support Co-Pilot - Ticket Processing",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/tickets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "processed",
+              "value": "eq.false"
+            },
+            {
+              "name": "order",
+              "value": "created_at.desc"
+            },
+            {
+              "name": "limit",
+              "value": "10"
+            },
+            {
+              "name": "select",
+              "value": "id,description,created_at"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "get-unprocessed-tickets",
+      "name": "Get Unprocessed Tickets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-auth",
+          "name": "Supabase Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "check-if-tickets-exist",
+      "name": "Check If Tickets Exist",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-tickets",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        900,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FASTAPI_URL }}/api/v1/process-ticket",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"ticket_id\": \"{{ $json.id }}\",\n  \"description\": \"{{ $json.description }}\"\n}",
+        "options": {
+          "timeout": 15000,
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 1000
+          }
+        }
+      },
+      "id": "call-fastapi",
+      "name": "Call FastAPI Classifier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1120,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "fastapi-auth",
+          "name": "FastAPI Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.classification.sentiment }}",
+              "operation": "equals",
+              "value2": "Negativo"
+            }
+          ]
+        }
+      },
+      "id": "check-sentiment",
+      "name": "Is Sentiment Negative?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.NOTIFICATION_FROM_EMAIL || 'noreply@company.com' }}",
+        "toEmail": "={{ $env.SUPPORT_EMAIL }}",
+        "subject": "=🚨 Negative Sentiment Alert - Ticket {{ $json.ticket_id }}",
+        "emailType": "html",
+        "message": "=<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }\n    .container { max-width: 600px; margin: 0 auto; padding: 20px; }\n    .header { background-color: #dc3545; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }\n    .content { background-color: #f8f9fa; padding: 20px; border: 1px solid #dee2e6; }\n    table { width: 100%; border-collapse: collapse; margin: 20px 0; }\n    td { padding: 10px; border: 1px solid #dee2e6; }\n    td:first-child { font-weight: bold; background-color: #e9ecef; width: 40%; }\n    .button { display: inline-block; padding: 12px 24px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-top: 20px; }\n    .footer { text-align: center; margin-top: 20px; color: #6c757d; font-size: 12px; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h2>⚠️ Negative Sentiment Detected</h2>\n    </div>\n    <div class=\"content\">\n      <p>A support ticket with <strong>negative sentiment</strong> has been detected and requires immediate attention.</p>\n      \n      <table>\n        <tr>\n          <td>Ticket ID</td>\n          <td>{{ $json.ticket_id }}</td>\n        </tr>\n        <tr>\n          <td>Category</td>\n          <td>{{ $json.classification.category }}</td>\n        </tr>\n        <tr>\n          <td>Sentiment</td>\n          <td><strong style=\"color: #dc3545;\">{{ $json.classification.sentiment }}</strong></td>\n        </tr>\n        <tr>\n          <td>Description</td>\n          <td>{{ $json.description || $('Call FastAPI Classifier').item.json.description }}</td>\n        </tr>\n        <tr>\n          <td>Created At</td>\n          <td>{{ $('Call FastAPI Classifier').item.json.created_at }}</td>\n        </tr>\n        <tr>\n          <td>Processing Time</td>\n          <td>{{ $json.processing_time_ms }}ms</td>\n        </tr>\n      </table>\n      \n      <p style=\"text-align: center;\">\n        <a href=\"{{ $env.DASHBOARD_URL }}/tickets/{{ $json.ticket_id }}\" class=\"button\">\n          View Ticket in Dashboard\n        </a>\n      </p>\n    </div>\n    <div class=\"footer\">\n      <p>This is an automated notification from AI-Powered Support Co-Pilot.</p>\n      <p>Do not reply to this email.</p>\n    </div>\n  </div>\n</body>\n</html>",
+        "options": {}
+      },
+      "id": "send-email-notification",
+      "name": "Send Email Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1560,
+        100
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-credentials",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Simulated Email Notification\n// This node logs the email details without actually sending\n\nconst ticketId = $input.item.json.ticket_id;\nconst category = $input.item.json.classification.category;\nconst sentiment = $input.item.json.classification.sentiment;\nconst description = $input.item.json.description || $('Call FastAPI Classifier').item.json.description;\nconst processingTime = $input.item.json.processing_time_ms;\n\nconsole.log('='.repeat(60));\nconsole.log('📧 EMAIL NOTIFICATION SIMULATED');\nconsole.log('='.repeat(60));\nconsole.log(`To: ${$env.SUPPORT_EMAIL}`);\nconsole.log(`Subject: 🚨 Negative Sentiment Alert - Ticket ${ticketId}`);\nconsole.log('');\nconsole.log('Email Body:');\nconsole.log('---');\nconsole.log(`⚠️  NEGATIVE SENTIMENT DETECTED`);\nconsole.log('');\nconsole.log(`Ticket ID:       ${ticketId}`);\nconsole.log(`Category:        ${category}`);\nconsole.log(`Sentiment:       ${sentiment}`);\nconsole.log(`Description:     ${description}`);\nconsole.log(`Processing Time: ${processingTime}ms`);\nconsole.log('');\nconsole.log(`Dashboard Link: ${$env.DASHBOARD_URL}/tickets/${ticketId}`);\nconsole.log('='.repeat(60));\n\nreturn {\n  json: {\n    notification_sent: true,\n    notification_type: 'simulated_email',\n    ticket_id: ticketId,\n    recipient: $env.SUPPORT_EMAIL,\n    subject: `🚨 Negative Sentiment Alert - Ticket ${ticketId}`,\n    sentiment: sentiment,\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "simulate-email-notification",
+      "name": "Simulate Email Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log positive/neutral sentiment for monitoring\nconst ticketId = $input.item.json.ticket_id;\nconst sentiment = $input.item.json.classification.sentiment;\n\nconsole.log(`✅ Ticket ${ticketId} processed - Sentiment: ${sentiment} (no notification needed)`);\n\nreturn {\n  json: {\n    notification_sent: false,\n    ticket_id: ticketId,\n    sentiment: sentiment,\n    reason: 'non_negative_sentiment',\n    timestamp: new Date().toISOString()\n  }\n};"
+      },
+      "id": "log-non-negative",
+      "name": "Log Non-Negative",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "merge-branches",
+      "name": "Merge Branches",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1780,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.length }}",
+              "operation": "largerEqual",
+              "value2": "1"
+            }
+          ]
+        }
+      },
+      "id": "no-tickets-found",
+      "name": "No Tickets Found",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        900,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Unprocessed Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Unprocessed Tickets": {
+      "main": [
+        [
+          {
+            "node": "Check If Tickets Exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If Tickets Exist": {
+      "main": [
+        [
+          {
+            "node": "Split Into Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Tickets Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Items": {
+      "main": [
+        [
+          {
+            "node": "Call FastAPI Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call FastAPI Classifier": {
+      "main": [
+        [
+          {
+            "node": "Is Sentiment Negative?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Sentiment Negative?": {
+      "main": [
+        [
+          {
+            "node": "Simulate Email Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Non-Negative",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simulate Email Notification": {
+      "main": [
+        [
+          {
+            "node": "Merge Branches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Non-Negative": {
+      "main": [
+        [
+          {
+            "node": "Merge Branches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Branches": {
+      "main": [
+        [
+          {
+            "node": "Split Into Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "id": "ai-automation",
+      "name": "AI Automation"
+    },
+    {
+      "id": "support",
+      "name": "Support"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-22T00:00:00.000Z",
+  "versionId": "1"
+}
