@@ -2,7 +2,7 @@
  * Ticket list component with real-time updates
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useTickets } from '@/hooks/useTickets'
 import { useRealtimeTickets } from '@/hooks/useRealtimeTickets'
 import { TicketCard } from './TicketCard'
@@ -15,17 +15,10 @@ export function TicketList() {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [newTicketIds, setNewTicketIds] = useState<Set<string>>(new Set())
 
-  // Update local tickets when initial fetch completes
-  useState(() => {
-    if (!loading && initialTickets.length > 0) {
-      setTickets(initialTickets)
-    }
-  })
-
   // Update tickets when initialTickets changes
-  useState(() => {
+  useEffect(() => {
     setTickets(initialTickets)
-  })
+  }, [initialTickets])
 
   // Handle real-time insert
   const handleInsert = useCallback((ticket: Ticket) => {

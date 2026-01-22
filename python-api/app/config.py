@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     )
 
     # LLM Provider Configuration
-    llm_provider: Literal["openai", "huggingface", "anthropic"] = Field(
+    llm_provider: Literal["openai", "huggingface", "anthropic", "ollama"] = Field(
         default="openai", description="LLM provider to use"
     )
     openai_api_key: Optional[str] = Field(
@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     )
     anthropic_api_key: Optional[str] = Field(
         default=None, description="Anthropic API key (required if provider=anthropic)"
+    )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434", description="Ollama server URL"
     )
 
     # LLM Model Configuration
@@ -98,6 +101,7 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ANTHROPIC_API_KEY required when LLM_PROVIDER=anthropic"
             )
+        # Ollama doesn't require API keys
         return self
 
     @field_validator("log_level")

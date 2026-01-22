@@ -4,9 +4,11 @@ LLM-based ticket classification service.
 
 import json
 from typing import Any
+import httpx
 
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
+from huggingface_hub import InferenceClient
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -45,8 +47,21 @@ class ClassifierService:
             # For future implementation
             raise NotImplementedError("Anthropic provider not yet implemented")
         elif settings.llm_provider == "huggingface":
-            # For future implementation
-            raise NotImplementedError("HuggingFace provider not yet implemented")
+            logger.info(
+                "Initializing HuggingFace LLM",
+                model=settings.llm_model,
+                temperature=settings.llm_temperature,
+            )
+            # Initialize HuggingFace InferenceClient
+            return InferenceClient(token=settings.hf_api_token)
+        elif settings.llm_provider == "ollama":
+            logger.info(
+                "Initializing Ollama LLM",
+                model=settings.llm_model,
+                base_url=settings.ollama_base_url,
+            )
+            # For Ollama, we'll use httpx client directly
+            return httpx.AsyncClient(base_url=settings.ollama_base_url, timeout=60.0)
         else:
             raise ValueError(f"Unknown LLM provider: {settings.llm_provider}")
 
@@ -71,8 +86,52 @@ class ClassifierService:
             LLMServiceError: If LLM service fails
         """
         try:
-            response = await self.llm.ainvoke(messages)
-            return response.content
+            if settings.llm_provider == "huggingface":
+                # For HuggingFace, convert messages to a single prompt
+                prompt = ""
+                for msg in messages:
+                    if isinstance(msg, SystemMessage):
+                        prompt += f"System: {msg.content}\n\n"
+                    elif isinstance(msg, HumanMessage):
+                        prompt += f"User: {msg.content}\n"
+
+                # Call HuggingFace API
+                response = self.llm.text_generation(
+                    prompt,
+                    model=settings.llm_model,
+                    max_new_tokens=settings.llm_max_tokens,
+                    temperature=settings.llm_temperature,
+                )
+                return response
+            elif settings.llm_provider == "ollama":
+                # For Ollama, format messages for chat API
+                ollama_messages = []
+                for msg in messages:
+                    if isinstance(msg, SystemMessage):
+                        ollama_messages.append({"role": "system", "content": msg.content})
+                    elif isinstance(msg, HumanMessage):
+                        ollama_messages.append({"role": "user", "content": msg.content})
+
+                # Call Ollama chat API
+                response = await self.llm.post(
+                    "/api/chat",
+                    json={
+                        "model": settings.llm_model,
+                        "messages": ollama_messages,
+                        "stream": False,
+                        "options": {
+                            "temperature": settings.llm_temperature,
+                            "num_predict": settings.llm_max_tokens,
+                        }
+                    }
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result["message"]["content"]
+            else:
+                # For OpenAI/Anthropic, use langchain's ainvoke
+                response = await self.llm.ainvoke(messages)
+                return response.content
         except TimeoutError as e:
             logger.error("LLM request timed out", error=str(e))
             raise LLMTimeoutError("LLM request timed out") from e
