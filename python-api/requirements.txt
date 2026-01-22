@@ -1,0 +1,30 @@
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# Data Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# LLM Integration
+langchain==0.1.20
+langchain-openai==0.1.0
+langchain-community==0.0.38
+openai==1.14.0
+
+# Database Client
+supabase==2.4.0
+postgrest==0.13.2
+
+# Utilities
+python-dotenv==1.0.1
+python-multipart==0.0.9
+
+# Retry Logic
+tenacity==8.2.3
+
+# Logging
+structlog==24.1.0
+
+# HTTP Client (for async operations)
+httpx==0.26.0
