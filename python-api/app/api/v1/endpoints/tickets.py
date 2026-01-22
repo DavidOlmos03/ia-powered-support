@@ -6,7 +6,7 @@ import time
 import uuid
 from contextvars import ContextVar
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core.exceptions import (
     DatabaseError,
@@ -15,11 +15,11 @@ from app.core.exceptions import (
     NotFoundError,
 )
 from app.core.logging_config import get_logger
-from app.dependencies import ApiKeyDep, ClassifierDep, SupabaseDep
+from app.dependencies import ApiKeyDep, ClassifierDep, SupabaseDep, verify_api_key
 from app.models.requests import ProcessTicketRequest
 from app.models.responses import ErrorDetail, ErrorResponse, ProcessTicketResponse
 
-router = APIRouter(tags=["tickets"], dependencies=[ApiKeyDep])
+router = APIRouter(tags=["tickets"], dependencies=[Depends(verify_api_key)])
 logger = get_logger(__name__)
 
 # Context variable for request ID

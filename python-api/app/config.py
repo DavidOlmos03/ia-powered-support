@@ -5,7 +5,7 @@ Environment variables are loaded from .env file or system environment.
 
 from typing import Literal, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,20 +87,18 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("llm_provider")
-    @classmethod
-    def validate_llm_credentials(cls, v: str, info) -> str:
+    @model_validator(mode="after")
+    def validate_llm_credentials(self) -> "Settings":
         """Ensure required API keys are present for selected provider."""
-        data = info.data
-        if v == "openai" and not data.get("openai_api_key"):
+        if self.llm_provider == "openai" and not self.openai_api_key:
             raise ValueError("OPENAI_API_KEY required when LLM_PROVIDER=openai")
-        elif v == "huggingface" and not data.get("hf_api_token"):
+        elif self.llm_provider == "huggingface" and not self.hf_api_token:
             raise ValueError("HF_API_TOKEN required when LLM_PROVIDER=huggingface")
-        elif v == "anthropic" and not data.get("anthropic_api_key"):
+        elif self.llm_provider == "anthropic" and not self.anthropic_api_key:
             raise ValueError(
                 "ANTHROPIC_API_KEY required when LLM_PROVIDER=anthropic"
             )
-        return v
+        return self
 
     @field_validator("log_level")
     @classmethod
