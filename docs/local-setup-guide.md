@@ -462,31 +462,178 @@ n8n start
 4. Selecciona `n8n-workflow/workflow.json`
 5. Click en "Import"
 
-### 5.2 Configurar Variables de Entorno en n8n
+### 5.2 Configurar Nodos del Workflow
 
-En cada nodo HTTP Request, actualiza las URLs:
+#### 📥 Nodo 1: "Get Unprocessed Tickets" (HTTP Request)
 
-**Nodo "Get Unprocessed Tickets":**
+Este nodo obtiene los tickets sin procesar desde Supabase.
+
+**1. Authentication:**
+- Type: `Generic Credential Type`
+- Generic Auth Type: `Header Auth`
+- Name: `apikey`
+- Value: `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...` (tu SUPABASE_SERVICE_ROLE_KEY)
+
+**2. HTTP Request Settings:**
+- **Method**: `GET`
+- **URL**: `https://tu-proyecto.supabase.co/rest/v1/tickets`
+
+**3. Query Parameters** (Add Parameter):
+- `processed`: `eq.false` (filtrar solo no procesados)
+- `select`: `*` (seleccionar todos los campos)
+- `order`: `created_at.asc` (ordenar por más antiguos primero)
+
+**4. Headers** (Add Header):
+- `Authorization`: `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...` (mismo que apikey)
+- `Content-Type`: `application/json`
+
+**URL Final completa:**
 ```
-URL: https://tu-proyecto.supabase.co/rest/v1/tickets
-Headers:
-  apikey: TU_SUPABASE_ANON_KEY
-  Authorization: Bearer TU_SUPABASE_ANON_KEY
+https://tikcyizaoggobuqafptu.supabase.co/rest/v1/tickets?processed=eq.false&select=*&order=created_at.asc
 ```
 
-**Nodo "Call FastAPI to Process Ticket":**
-```
-URL: http://host.docker.internal:8000/api/v1/process-ticket
+**Respuesta esperada:**
+```json
+[
+  {
+    "id": "uuid-del-ticket",
+    "description": "Mi conexión a internet no funciona",
+    "processed": false,
+    "created_at": "2026-01-22T...",
+    ...
+  }
+]
 ```
 
-⚠️ **Nota:** Si usas Docker, usa `host.docker.internal` en lugar de `localhost`.
+---
 
-### 5.3 Activar el Workflow
+#### 🤖 Nodo 2: "Call FastAPI Classifier" (HTTP Request)
+
+Este nodo envía cada ticket a tu API de FastAPI para clasificarlo con IA.
+
+**1. Authentication:**
+- Type: `Generic Credential Type`
+- Generic Auth Type: `Header Auth`
+- Name: `X-API-Key`
+- Value: `oMEuUaUY35EcRdLLPDHN5Db9vqtYfZXxJ_83OLficXI` (tu API_KEY del .env)
+
+**2. HTTP Request Settings:**
+- **Method**: `POST`
+- **URL**: `http://host.docker.internal:8000/api/v1/process-ticket`
+  - ⚠️ Si n8n está en Docker: usa `host.docker.internal:8000`
+  - ⚠️ Si n8n está local (npm): usa `localhost:8000`
+
+**3. Headers:**
+- `Content-Type`: `application/json`
+
+**4. Body (Send Body):**
+- **Body Content Type**: `JSON`
+- **Specify Body**: `Using JSON`
+
+**JSON Body:**
+```json
+{
+  "ticket_id": "{{ $json.id }}",
+  "description": "{{ $json.description }}"
+}
+```
+
+**Expresiones n8n:**
+- `{{ $json.id }}`: Toma el ID del ticket del nodo anterior
+- `{{ $json.description }}`: Toma la descripción del nodo anterior
+
+**Respuesta esperada:**
+```json
+{
+  "success": true,
+  "ticket_id": "uuid-del-ticket",
+  "classification": {
+    "category": "Técnico",
+    "sentiment": "Neutral",
+    "confidence_score": null
+  },
+  "processing_time_ms": 23833,
+  "message": "Ticket processed successfully"
+}
+```
+
+---
+
+#### 📧 Nodo 3: "Send Email Notification" (Opcional)
+
+Puedes configurar notificaciones por email para tickets procesados.
+
+**Opción A: Gmail (para testing)**
+
+1. Crear credencial Gmail OAuth2 en n8n
+2. Configurar nodo:
+   - **To**: `tu-email@gmail.com`
+   - **Subject**: `🎫 Ticket Procesado: {{ $node["Call FastAPI Classifier"].json.classification.category }}`
+   - **Message Type**: `HTML`
+   - **Message**:
+   ```html
+   <h2>Ticket Procesado</h2>
+   <p><strong>ID:</strong> {{ $node["Call FastAPI Classifier"].json.ticket_id }}</p>
+   <p><strong>Categoría:</strong> {{ $node["Call FastAPI Classifier"].json.classification.category }}</p>
+   <p><strong>Sentimiento:</strong> {{ $node["Call FastAPI Classifier"].json.classification.sentiment }}</p>
+   <p><strong>Tiempo:</strong> {{ $node["Call FastAPI Classifier"].json.processing_time_ms }}ms</p>
+   ```
+
+**Opción B: SMTP**
+
+1. Crear credencial SMTP en n8n
+2. Configurar servidor:
+   - **Host**: `smtp.gmail.com` (o tu proveedor)
+   - **Port**: `587`
+   - **User**: `tu-email@ejemplo.com`
+   - **Password**: App Password de Gmail
+3. Configurar mensaje igual que Opción A
+
+---
+
+### 5.3 Configurar Trigger del Workflow
+
+**Schedule Trigger:**
+- **Trigger Interval**: `Every 60 seconds`
+- **Description**: "Check for new unprocessed tickets every minute"
+
+Esto ejecutará el workflow automáticamente cada 60 segundos para buscar tickets nuevos.
+
+---
+
+### 5.4 Probar el Workflow
+
+**Test Manual:**
+1. En n8n, click en "Execute Workflow" (botón ▶️)
+2. Deberías ver:
+   - ✅ Nodo 1: Lista de tickets sin procesar
+   - ✅ Nodo 2: Respuesta de clasificación para cada ticket
+   - ✅ Nodo 3: Confirmación de email enviado (si configurado)
+
+**Test con Trigger:**
+1. Click en "Active" (toggle arriba a la derecha)
+2. Inserta un ticket nuevo en Supabase:
+   ```sql
+   INSERT INTO tickets (description, processed)
+   VALUES ('Mi internet no funciona desde esta mañana', false);
+   ```
+3. Espera hasta 60 segundos
+4. Ve a "Executions" en n8n para ver el resultado
+
+⚠️ **Nota:** Si usas Docker, recuerda usar `host.docker.internal` en lugar de `localhost`.
+
+### 5.5 Activar el Workflow
 
 1. Click en el toggle "Inactive" → "Active" (arriba a la derecha)
-2. El workflow se ejecutará cada 60 segundos
+2. El workflow se ejecutará cada 60 segundos automáticamente
+3. Verifica que no hay errores en la primera ejecución
 
 ✅ **Si no hay errores en la ejecución, n8n está listo!**
+
+**Monitoreo:**
+- Ve a "Executions" para ver el historial de ejecuciones
+- Cada ejecución mostrará cuántos tickets se procesaron
+- Los errores aparecerán en rojo con detalles del problema
 
 ---
 
