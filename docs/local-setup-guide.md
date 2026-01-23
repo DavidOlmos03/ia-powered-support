@@ -126,15 +126,26 @@ ORDER BY ordinal_position;
 
 ### 2.4 Obtener Credentials
 
-Ve a **Project Settings > API** y copia:
+Ve a **Project Settings > API** y copia **ambas keys**:
 
 ```bash
 # Guarda estos valores (los necesitarás después)
 SUPABASE_URL="https://tu-proyecto.supabase.co"
-SUPABASE_SERVICE_ROLE_KEY="eyJ..."  # Service role (NO la anon key)
+SUPABASE_SERVICE_ROLE_KEY="eyJ..."  # Service role - Full access
+SUPABASE_ANON_KEY="eyJ..."          # Anon - Limited by RLS policies
 ```
 
-⚠️ **IMPORTANTE:** Usa la **service_role** key (no la anon key) para el backend.
+⚠️ **IMPORTANTE - Diferencia entre keys:**
+
+| Key Type | Uso | Permisos | Dónde Usarla |
+|----------|-----|----------|--------------|
+| **service_role** | Backend/Testing | Bypass RLS, acceso completo | Python API, testing con curl |
+| **anon** | Frontend | Limitado por RLS policies | React app (navegador) |
+
+**Para testing:**
+- ✅ Usa `service_role` para crear/modificar tickets con curl
+- ✅ Usa `anon` solo para leer (SELECT) si RLS lo permite
+- ⚠️ Si ves error "row-level security policy", necesitas usar `service_role`
 
 ---
 
@@ -666,12 +677,15 @@ curl -X GET http://localhost:8000/health | jq
 
 #### ✅ Test 2: Insertar Ticket en Supabase
 
+**⚠️ IMPORTANTE:** Usa la **service_role** key para insertar tickets (la anon key no tiene permisos INSERT debido a RLS).
+
 ```bash
-# Insertar un ticket nuevo
+# Insertar un ticket nuevo con service role key
 curl -X POST "https://tu-proyecto.supabase.co/rest/v1/tickets" \
-  -H "apikey: TU_ANON_KEY" \
-  -H "Authorization: Bearer TU_ANON_KEY" \
+  -H "apikey: TU_SERVICE_ROLE_KEY" \
+  -H "Authorization: Bearer TU_SERVICE_ROLE_KEY" \
   -H "Content-Type: application/json" \
+  -H "Prefer: return=representation" \
   -d '{
     "description": "Mi internet está muy lento desde esta mañana. He reiniciado el router pero sigue igual.",
     "processed": false
@@ -679,24 +693,40 @@ curl -X POST "https://tu-proyecto.supabase.co/rest/v1/tickets" \
 ```
 
 **✅ PASS si:** Retorna el ticket con `id` y `created_at`
-**❌ FAIL si:** Error 401/403 (revisar API key) o 400 (revisar schema)
+**❌ FAIL si:**
+- Error 42501 → RLS policy violation (estás usando anon key en lugar de service role)
+- Error 401/403 → API key incorrecta
+- Error 400 → Schema incorrecto
 
 ---
 
-#### ✅ Test 3: Procesar Ticket con FastAPI
+#### ✅ Test 3: Procesar Ticket con FastAPI (End-to-End)
+
+**Flujo completo:** Crear ticket → Procesar con IA → Verificar resultado
 
 ```bash
-# Obtener el ID del ticket que insertaste (desde SQL Editor o curl)
-TICKET_ID="uuid-del-ticket"
+# 1. Crear ticket y capturar el ID automáticamente
+TICKET_ID=$(curl -s -X POST "https://tu-proyecto.supabase.co/rest/v1/tickets" \
+  -H "apikey: TU_SERVICE_ROLE_KEY" \
+  -H "Authorization: Bearer TU_SERVICE_ROLE_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Prefer: return=representation" \
+  -d '{"description": "Mi internet no funciona desde esta mañana, eso me frustra demasiado.", "processed": false}' \
+  | jq -r '.[0].id')
 
-# Procesar
+echo "✅ Ticket creado: $TICKET_ID"
+
+# 2. Procesar el ticket con FastAPI
 curl -X POST http://localhost:8000/api/v1/process-ticket \
   -H "Content-Type: application/json" \
-  -d "{
-    \"ticket_id\": \"$TICKET_ID\",
-    \"description\": \"Mi internet está muy lento desde esta mañana.\"
-  }" | jq
+  -H "X-API-Key: TU_API_KEY" \
+  -d "{\"ticket_id\": \"$TICKET_ID\", \"description\": \"Mi internet no funciona desde esta mañana, eso me frustra demasiado.\"}" | jq
 ```
+
+**Nota:** Reemplaza los valores:
+- `TU_SERVICE_ROLE_KEY`: Desde Supabase Dashboard > Project Settings > API > service_role key
+- `TU_API_KEY`: Desde tu archivo `python-api/.env` (variable `API_KEY`)
+
 
 **Esperado:**
 ```json
