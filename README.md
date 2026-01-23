@@ -53,6 +53,28 @@ Full-stack application that automatically processes, categorizes, and analyzes s
 
 ---
 
+## 📸 Screenshots
+
+### Dashboard - Real-time Ticket View
+
+![Dashboard Frontend](imgs/dashboard-frontend.png)
+
+*Live dashboard showing classified tickets with real-time updates, category badges, and sentiment indicators*
+
+### FastAPI - Interactive API Documentation
+
+![FastAPI Swagger Documentation](imgs/fastapi-swagger.png)
+
+*Auto-generated Swagger UI with all endpoints, schemas, and interactive testing capabilities*
+
+### n8n - Automated Workflow
+
+![n8n Workflow](imgs/n8n-workflow.png)
+
+*Visual workflow showing ticket polling, AI classification, and conditional email notifications*
+
+---
+
 ## 🌐 Live Deployments
 
 ### Production URLs
