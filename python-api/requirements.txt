@@ -10,12 +10,12 @@ pydantic-settings==2.7.1
 
 # LLM Integration
 # Updated for compatibility with pydantic 2.10+
-langchain
-langchain-openai
-langchain-community
-langchain-huggingface
-openai>=1.0.0
-huggingface-hub>=0.36.0
+# Using compatible version ranges to avoid conflicts
+langchain>=0.3.20,<0.4.0
+langchain-openai>=0.2.14,<0.3.0
+langchain-community>=0.3.20,<0.4.0
+openai>=1.59.0,<2.0.0
+huggingface-hub>=0.28.0,<1.0.0
 
 # Database Client
 # Updated for Python 3.14 compatibility
