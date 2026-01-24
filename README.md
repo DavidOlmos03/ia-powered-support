@@ -212,12 +212,6 @@ VALUES ('Mi conexión a internet no funciona, estoy muy frustrado');
 - **Workflow Design:** [docs/n8n-workflow-design.md](docs/n8n-workflow-design.md)
 - **Prompt Strategy:** [docs/prompt-engineering.md](docs/prompt-engineering.md)
 
-### API Documentation
-
-Once deployed, visit:
-- **Swagger UI:** `https://your-api.railway.app/docs`
-- **ReDoc:** `https://your-api.railway.app/redoc`
-
 ---
 
 ## 🧪 Testing
@@ -266,7 +260,7 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 ## 👥 Authors
 
-- **Your Name** - [GitHub](https://github.com/your-username)
+- **David Olmos** - [GitHub](https://github.com/DavidOlmos03)
 
 ---
 
