@@ -40,12 +40,8 @@ USER appuser
 # Make sure scripts in .local are usable
 ENV PATH=/home/appuser/.local/bin:$PATH
 
-# Expose port
+# Expose port (Railway uses PORT env var dynamically)
 EXPOSE 8000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health/live', timeout=5)"
 
 # Run application
 # Use shell form to allow PORT environment variable expansion
