@@ -81,12 +81,8 @@ Full-stack application that automatically processes, categorizes, and analyzes s
 
 | Service | URL | Status |
 |---------|-----|--------|
-| **Dashboard** | `https://your-dashboard.vercel.app` | 🟢 Live |
-| **FastAPI** | `https://your-api.railway.app` | 🟢 Live |
-| **API Docs** | `https://your-api.railway.app/docs` | 🟢 Live |
-| **Supabase** | `https://your-project.supabase.co` | 🟢 Live |
-
-> **Note:** Replace URLs above with your actual deployment URLs
+| **Dashboard** | `https://ia-powered-support.vercel.app/` | 🟢 Live |
+| **API** | `https://ia-powered-support-production.up.railway.app/` | 🟢 Live |
 
 ### Health Check Endpoints
 
