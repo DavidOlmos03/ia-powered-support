@@ -66,4 +66,4 @@ async def verify_api_key(
 # Type aliases for dependency injection
 ClassifierDep = Annotated[ClassifierService, Depends(get_classifier_service)]
 SupabaseDep = Annotated[SupabaseService, Depends(get_supabase_service)]
-ApiKeyDep = Annotated[None, Depends(verify_api_key)]
+ApiKeyDep = Depends(verify_api_key)

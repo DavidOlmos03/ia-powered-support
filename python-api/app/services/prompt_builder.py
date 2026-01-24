@@ -6,114 +6,138 @@ from typing import Any
 
 
 class PromptBuilderService:
-    """Service for constructing LLM prompts."""
+    """
+    A service dedicated to constructing detailed and effective prompts for the LLM.
 
-    def __init__(self):
-        """Initialize prompt builder."""
+    This service encapsulates all the logic related to prompt engineering,
+    including defining the role of the AI, specifying the task, providing
+    clear definitions for categories and sentiments, and including few-shot
+    examples to improve classification accuracy.
+
+    Separating prompt logic here makes it easy to experiment with and refine
+    prompts without altering the core classification service.
+    """
+
+    def __init__(self) -> None:
+        """Initializes the prompt builder service."""
         self.system_message = self._build_system_message()
         self.few_shot_examples = self._get_few_shot_examples()
 
     def _build_system_message(self) -> str:
-        """Build the system message for chat models."""
-        return "You are a support ticket classifier for a Spanish-language customer service system. Always respond with valid JSON only."
+        """
+        Builds the initial system message for chat-based models.
+
+        This message sets the context for the AI, defining its role as a
+        specialized classifier and establishing the primary rule of
+        responding only with JSON.
+
+        Returns:
+            The system message string.
+        """
+        return (
+            "You are an expert support ticket classifier for a Spanish-language "
+            "customer service system. Your sole purpose is to analyze a ticket's "
+            "content and return a valid JSON object with its classification. "
+            "You must not provide any explanations, apologies, or conversational text."
+        )
 
     def _get_few_shot_examples(self) -> list[dict[str, str]]:
-        """Get few-shot examples for the prompt."""
+        """
+        Provides a list of curated examples for few-shot prompting.
+
+        These examples help the LLM understand the expected input/output format
+        and improve its accuracy by showing concrete cases for each category
+        and sentiment.
+
+        Returns:
+            A list of dictionaries, where each dictionary represents a single
+            few-shot example with an "input" and "output" key.
+        """
         return [
             {
-                "input": "Mi factura tiene un cargo duplicado este mes",
+                "input": "Mi factura tiene un cargo duplicado este mes. ¿Pueden arreglarlo?",
                 "output": '{"category": "Facturación", "sentiment": "Negativo"}',
             },
             {
-                "input": "¿Cómo reseteo mi contraseña?",
+                "input": "¿Cómo puedo resetear mi contraseña? No encuentro la opción.",
                 "output": '{"category": "Técnico", "sentiment": "Neutral"}',
             },
             {
-                "input": "Excelente servicio, gracias por la ayuda",
+                "input": "¡Excelente servicio! Me resolvieron el problema súper rápido. Gracias.",
                 "output": '{"category": "Comercial", "sentiment": "Positivo"}',
             },
             {
-                "input": "No puedo conectarme desde ayer, muy frustrado",
+                "input": "La conexión a internet ha estado intermitente todo el día.",
                 "output": '{"category": "Técnico", "sentiment": "Negativo"}',
             },
             {
-                "input": "Quiero información sobre el plan premium",
+                "input": "Quisiera más información sobre los planes de fibra óptica.",
                 "output": '{"category": "Comercial", "sentiment": "Neutral"}',
             },
         ]
 
-    def build_classification_prompt(
-        self, description: str, include_examples: bool = True
-    ) -> str:
+    def build_classification_prompt(self, description: str) -> str:
         """
-        Build the complete classification prompt.
+        Constructs the full, detailed prompt for classifying a ticket description.
+
+        This method assembles the final prompt by combining the task definition,
+        category/sentiment rules, few-shot examples, and the specific ticket
+        description that needs to be classified.
 
         Args:
-            description: Ticket description to classify
-            include_examples: Whether to include few-shot examples
+            description: The raw text from the support ticket.
 
         Returns:
-            Complete prompt string
+            A complete, formatted prompt string ready to be sent to the LLM.
         """
+        # Using a list of strings for efficient joining.
         prompt_parts = [
-            "You are a support ticket classifier for a Spanish-language customer service system.",
-            "",
-            "TASK: Analyze the ticket and return ONLY a valid JSON object with category and sentiment.",
-            "",
-            "CATEGORIES (choose exactly one):",
-            '- "Técnico": Technical issues, bugs, errors, connectivity, passwords, system access',
-            '- "Facturación": Billing, payments, invoices, charges, refunds, pricing',
-            '- "Comercial": Sales, product info, upgrades, features, feedback, general inquiries',
-            "",
-            "SENTIMENT (choose exactly one):",
-            '- "Positivo": Satisfaction, praise, gratitude, enthusiasm',
-            '- "Neutral": Questions, factual statements, neutral tone',
-            '- "Negativo": Complaints, frustration, anger, dissatisfaction',
-            "",
-            "RULES:",
-            '1. Output ONLY valid JSON: {"category": "X", "sentiment": "Y"}',
-            "2. NO explanations, NO markdown, NO extra text",
-            "3. Use exact category/sentiment values (case-sensitive)",
-            '4. If ambiguous, prefer: category="Técnico", sentiment="Neutral"',
+            "TASK: Analyze the user's support ticket and return ONLY a valid JSON object with 'category' and 'sentiment' fields.",
+            "\nDEFINITIONS:",
+            "1. CATEGORIES:",
+            '   - "Técnico": Technical issues (e.g., bugs, errors, connectivity, passwords, system access).',
+            '   - "Facturación": Billing matters (e.g., payments, invoices, charges, refunds, pricing).',
+            '   - "Comercial": General inquiries (e.g., sales, product info, upgrades, feedback).',
+            "2. SENTIMENTS:",
+            '   - "Positivo": User expresses satisfaction, praise, or gratitude.',
+            '   - "Neutral": User asks a question, makes a factual statement, or has a neutral tone.',
+            '   - "Negativo": User expresses complaints, frustration, anger, or dissatisfaction.',
+            "\nRULES:",
+            '1. Your response MUST be a single, valid JSON object: {"category": "VALUE", "sentiment": "VALUE"}.',
+            "2. DO NOT include explanations, markdown (` ```json `), or any text outside the JSON object.",
+            "3. Use the exact, case-sensitive category and sentiment values defined above.",
+            '4. If a ticket is ambiguous, use the default classification: {"category": "Técnico", "sentiment": "Neutral"}.',
+            "\nEXAMPLES:",
         ]
 
-        if include_examples:
-            prompt_parts.extend(
-                [
-                    "",
-                    "EXAMPLES:",
-                    "",
-                ]
-            )
-            for example in self.few_shot_examples:
-                prompt_parts.append(f'Input: "{example["input"]}"')
-                prompt_parts.append(f'Output: {example["output"]}')
-                prompt_parts.append("")
+        # Append few-shot examples for context
+        for example in self.few_shot_examples:
+            prompt_parts.append(f'\nInput: "{example["input"]}"\nOutput: {example["output"]}')
 
+        # Append the actual ticket to be classified
         prompt_parts.extend(
             [
-                "Now classify this ticket:",
-                "",
-                f'Input: "{description}"',
-                "Output:",
+                "\nTICKET TO CLASSIFY:",
+                f'\nInput: "{description}"\nOutput:',
             ]
         )
 
         return "\n".join(prompt_parts)
 
-    def build_chat_messages(self, description: str) -> list[dict[str, str]]:
+    def messages_to_prompt(self, messages: list[Any]) -> str:
         """
-        Build messages for chat-based models (OpenAI, Claude).
+        Converts a list of LangChain message objects into a single string prompt.
+
+        Useful for models or providers (like HuggingFace's InferenceClient)
+        that expect a single consolidated string instead of a structured list
+        of messages.
 
         Args:
-            description: Ticket description to classify
+            messages: A list of LangChain `SystemMessage` or `HumanMessage` objects.
 
         Returns:
-            List of message dictionaries
+            A single formatted string combining all message content.
         """
-        messages = [
-            {"role": "system", "content": self.system_message},
-            {"role": "user", "content": self.build_classification_prompt(description)},
-        ]
-
-        return messages
+        return "\n".join(
+            [f"{'System: ' if msg.type == 'system' else 'User: '}{msg.content}" for msg in messages]
+        )

@@ -8,6 +8,7 @@ from uuid import UUID
 
 from supabase import Client, create_client
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+import httpx
 
 from app.config import settings
 from app.core.exceptions import DatabaseConnectionError, DatabaseError, NotFoundError
@@ -18,225 +19,190 @@ logger = get_logger(__name__)
 
 
 class SupabaseService:
-    """Service for interacting with Supabase database."""
+    """
+    A service for interacting with the Supabase database.
 
-    def __init__(self):
-        """Initialize Supabase client."""
+    This class abstracts all database operations, providing a clean and
+    centralized interface for the rest of the application. It handles the
+    initialization of the Supabase client and includes robust retry logic
+    for all database calls to ensure resilience against transient network issues.
+    """
+
+    def __init__(self) -> None:
+        """
+        Initializes the SupabaseService and its underlying client.
+        """
         self.client: Client = self._initialize_client()
 
     def _initialize_client(self) -> Client:
-        """Initialize Supabase client with service role key."""
+        """
+        Creates and configures the Supabase client.
+
+        Uses the connection details from the application settings to establish
+        a connection to the Supabase project.
+
+        Returns:
+            An initialized `supabase.Client` instance.
+
+        Raises:
+            DatabaseConnectionError: If the client fails to initialize,
+                                     indicating a configuration or connectivity problem.
+        """
         try:
             client = create_client(
                 supabase_url=settings.supabase_url,
                 supabase_key=settings.supabase_service_role_key,
             )
-            logger.info("Supabase client initialized successfully")
+            logger.info("Supabase client initialized successfully.")
             return client
         except Exception as e:
-            logger.error("Failed to initialize Supabase client", error=str(e))
-            raise DatabaseConnectionError(f"Failed to connect to database: {str(e)}") from e
+            logger.error("Failed to initialize Supabase client.", error=str(e), exc_info=True)
+            raise DatabaseConnectionError(f"Could not connect to Supabase: {e}") from e
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=5),
-        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+        stop=stop_after_attempt(settings.max_retries),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
         reraise=True,
     )
-    async def get_ticket(self, ticket_id: UUID) -> Optional[TicketRecord]:
+    async def get_ticket(self, ticket_id: UUID) -> TicketRecord:
         """
-        Fetch a ticket by ID.
+        Fetches a single support ticket from the database by its unique ID.
 
         Args:
-            ticket_id: Ticket UUID
+            ticket_id: The UUID of the ticket to retrieve.
 
         Returns:
-            TicketRecord if found, None otherwise
+            A `TicketRecord` object representing the fetched ticket.
 
         Raises:
-            DatabaseError: If query fails
+            NotFoundError: If no ticket with the specified ID is found.
+            DatabaseError: If any other database-related error occurs.
         """
+        logger.debug("Fetching ticket from database", ticket_id=ticket_id)
         try:
-            logger.debug("Fetching ticket from database", ticket_id=str(ticket_id))
+            response = self.client.table("tickets").select("*").eq("id", str(ticket_id)).single().execute()
 
-            response = (
-                self.client.table("tickets")
-                .select("*")
-                .eq("id", str(ticket_id))
-                .execute()
-            )
+            if not response.data:
+                raise NotFoundError(f"Ticket with ID '{ticket_id}' not found.")
 
-            if not response.data or len(response.data) == 0:
-                logger.warning("Ticket not found", ticket_id=str(ticket_id))
-                return None
-
-            ticket_data = response.data[0]
-            logger.debug("Ticket fetched successfully", ticket_id=str(ticket_id))
-
-            return TicketRecord(**ticket_data)
-
+            return TicketRecord(**response.data)
+        except PostgrestAPIError as e:
+            if e.code == "PGRST116":  # "single() row not found"
+                raise NotFoundError(f"Ticket with ID '{ticket_id}' not found.") from e
+            logger.error("Database error fetching ticket", ticket_id=ticket_id, error=e.message)
+            raise DatabaseError(f"Could not fetch ticket: {e.message}") from e
         except Exception as e:
-            logger.error(
-                "Failed to fetch ticket",
-                ticket_id=str(ticket_id),
-                error=str(e),
-                exc_info=True,
-            )
-            raise DatabaseError(f"Failed to fetch ticket: {str(e)}") from e
+            logger.error("Unexpected error fetching ticket", ticket_id=ticket_id, error=e, exc_info=True)
+            raise DatabaseError(f"An unexpected error occurred: {e}") from e
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=5),
-        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+        stop=stop_after_attempt(settings.max_retries),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
         reraise=True,
     )
-    async def start_processing(self, ticket_id: UUID) -> None:
-        """
-        Mark ticket as processing started.
-
-        Args:
-            ticket_id: Ticket UUID
-
-        Raises:
-            DatabaseError: If update fails
-        """
-        try:
-            logger.debug("Marking ticket processing started", ticket_id=str(ticket_id))
-
-            self.client.table("tickets").update(
-                {"processing_started_at": datetime.utcnow().isoformat()}
-            ).eq("id", str(ticket_id)).execute()
-
-            logger.debug("Ticket marked as processing", ticket_id=str(ticket_id))
-
-        except Exception as e:
-            logger.error(
-                "Failed to mark ticket as processing",
-                ticket_id=str(ticket_id),
-                error=str(e),
-                exc_info=True,
-            )
-            raise DatabaseError(f"Failed to update ticket: {str(e)}") from e
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=5),
-        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
-        reraise=True,
-    )
-    async def complete_processing(
+    async def update_ticket_classification(
         self, ticket_id: UUID, classification: ClassificationResult
     ) -> TicketRecord:
         """
-        Update ticket with classification results.
+        Updates a ticket with the results of an AI classification.
+
+        This method sets the ticket's category, sentiment, and marks it as
+        processed. It also clears any previous error messages related to
+        processing.
 
         Args:
-            ticket_id: Ticket UUID
-            classification: Classification results
+            ticket_id: The UUID of the ticket to update.
+            classification: The `ClassificationResult` object containing the
+                            new category and sentiment.
 
         Returns:
-            Updated TicketRecord
+            The updated `TicketRecord` object.
 
         Raises:
-            DatabaseError: If update fails
+            NotFoundError: If the ticket to update is not found.
+            DatabaseError: If the update operation fails for any other reason.
         """
+        logger.info("Updating ticket with classification", ticket_id=ticket_id, category=classification.category.value)
         try:
-            logger.info(
-                "Updating ticket with classification",
-                ticket_id=str(ticket_id),
-                category=classification.category.value,
-                sentiment=classification.sentiment.value,
-            )
+            update_data = {
+                "category": classification.category.value,
+                "sentiment": classification.sentiment.value,
+                "processed": True,
+                "processing_completed_at": datetime.utcnow().isoformat(),
+                "processing_error": None,  # Clear any previous errors
+            }
+            response = self.client.table("tickets").update(update_data).eq("id", str(ticket_id)).single().execute()
 
-            response = (
-                self.client.table("tickets")
-                .update(
-                    {
-                        "category": classification.category.value,
-                        "sentiment": classification.sentiment.value,
-                        "processed": True,
-                        "processing_completed_at": datetime.utcnow().isoformat(),
-                        "processing_error": None,  # Clear any previous errors
-                    }
-                )
-                .eq("id", str(ticket_id))
-                .execute()
-            )
+            if not response.data:
+                raise NotFoundError(f"Could not update ticket with ID '{ticket_id}' as it was not found.")
 
-            if not response.data or len(response.data) == 0:
-                raise DatabaseError("No ticket was updated")
-
-            logger.info("Ticket updated successfully", ticket_id=str(ticket_id))
-
-            return TicketRecord(**response.data[0])
-
+            logger.info("Ticket updated successfully", ticket_id=ticket_id)
+            return TicketRecord(**response.data)
+        except PostgrestAPIError as e:
+            if e.code == "PGRST116":
+                raise NotFoundError(f"Could not update ticket with ID '{ticket_id}' as it was not found.") from e
+            logger.error("Database error updating ticket", ticket_id=ticket_id, error=e.message)
+            raise DatabaseError(f"Could not update ticket: {e.message}") from e
         except Exception as e:
-            logger.error(
-                "Failed to update ticket with classification",
-                ticket_id=str(ticket_id),
-                error=str(e),
-                exc_info=True,
-            )
-            raise DatabaseError(f"Failed to update ticket: {str(e)}") from e
+            logger.error("Unexpected error updating ticket", ticket_id=ticket_id, error=e, exc_info=True)
+            raise DatabaseError(f"An unexpected error occurred during update: {e}") from e
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=5),
-        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
-        reraise=True,
+        stop=stop_after_attempt(2), # Fewer retries for error logging
+        wait=wait_exponential(multiplier=1, min=1, max=3),
+        retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
     )
-    async def record_error(self, ticket_id: UUID, error_message: str) -> None:
+    async def record_processing_error(self, ticket_id: UUID, error_message: str) -> None:
         """
-        Record processing error for a ticket.
+        Records a processing error for a specific ticket in the database.
+
+        This is a best-effort operation. It logs the error message and increments
+        a retry counter. Failures in this method are logged but do not raise
+        exceptions, to prevent the main processing flow from failing if error
+        logging itself has an issue.
 
         Args:
-            ticket_id: Ticket UUID
-            error_message: Error description
-
-        Raises:
-            DatabaseError: If update fails
+            ticket_id: The UUID of the ticket that failed to process.
+            error_message: A descriptive message of the error that occurred.
         """
+        logger.warning("Recording processing error for ticket", ticket_id=ticket_id, error=error_message)
         try:
-            logger.warning(
-                "Recording processing error",
-                ticket_id=str(ticket_id),
-                error=error_message,
-            )
-
+            # Note: This is not an atomic operation. For high-concurrency scenarios,
+            # a database function (RPC) would be more appropriate.
             self.client.table("tickets").update(
                 {
                     "processing_error": error_message,
-                    "retry_count": self.client.table("tickets")
-                    .select("retry_count")
-                    .eq("id", str(ticket_id))
-                    .execute()
-                    .data[0]["retry_count"]
-                    + 1,
+                    "retry_count": self.client.rpc("increment_retry_count", {"ticket_id_param": str(ticket_id)}).execute().data
                 }
             ).eq("id", str(ticket_id)).execute()
-
-            logger.debug("Error recorded for ticket", ticket_id=str(ticket_id))
-
         except Exception as e:
+            # Log the failure to record the error, but do not re-raise.
+            # This prevents a failure in error-logging from crashing the worker.
             logger.error(
-                "Failed to record error",
-                ticket_id=str(ticket_id),
-                error=str(e),
+                "Failed to record processing error in database.",
+                ticket_id=ticket_id,
+                original_error=error_message,
+                logging_error=str(e),
                 exc_info=True,
             )
-            # Don't raise here - this is a best-effort operation
 
     async def health_check(self) -> bool:
         """
-        Check database connectivity.
+        Performs a simple health check on the database.
+
+        This method attempts to execute a lightweight query to verify that the
+        database is reachable and responsive.
 
         Returns:
-            True if database is reachable, False otherwise
+            `True` if the database connection is healthy, `False` otherwise.
         """
         try:
-            # Simple query to test connection
+            # A simple, fast query to check if the database is responsive.
             self.client.table("tickets").select("id").limit(1).execute()
+            logger.debug("Database health check successful.")
             return True
         except Exception as e:
-            logger.error("Database health check failed", error=str(e))
+            logger.error("Database health check failed.", error=str(e), exc_info=True)
             return False

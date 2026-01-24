@@ -26,16 +26,50 @@ logger = get_logger(__name__)
 
 
 class ClassifierService:
-    """Service for classifying tickets using LLM."""
+    """
+    A service for classifying support tickets using a Large Language Model (LLM).
 
-    def __init__(self):
-        """Initialize classifier service."""
+    This service handles the entire classification workflow, including:
+    - Initializing the appropriate LLM based on application settings.
+    - Building a structured prompt for the LLM.
+    - Calling the LLM API with robust retry and error handling.
+    - Parsing and validating the LLM's response.
+    - Returning a structured classification result.
+
+    The service is designed to be extensible, allowing for different LLM providers
+    (e.g., OpenAI, HuggingFace, Ollama) to be used interchangeably.
+    """
+
+    def __init__(self) -> None:
+        """
+        Initializes the ClassifierService.
+
+        This sets up the prompt builder and initializes the LLM client based on
+        the configuration specified in the application settings.
+        """
         self.prompt_builder = PromptBuilderService()
         self.llm = self._initialize_llm()
 
     def _initialize_llm(self) -> Any:
-        """Initialize the LLM based on configuration."""
-        if settings.llm_provider == "openai":
+        """
+        Initializes and returns the LLM client based on application settings.
+
+        This method acts as a factory, creating a client for the configured
+        LLM provider (e.g., OpenAI, HuggingFace, Ollama). It reads the
+        `llm_provider` from the settings and returns the corresponding
+        initialized client.
+
+        Returns:
+            An instance of the LLM client (e.g., `ChatOpenAI`, `InferenceClient`).
+
+        Raises:
+            NotImplementedError: If the configured provider is not yet supported.
+            ValueError: If the `llm_provider` setting is unknown.
+        """
+        provider = settings.llm_provider
+        logger.info("Initializing LLM", provider=provider, model=settings.llm_model)
+
+        if provider == "openai":
             return ChatOpenAI(
                 model=settings.llm_model,
                 temperature=settings.llm_temperature,
@@ -43,59 +77,52 @@ class ClassifierService:
                 request_timeout=settings.llm_timeout,
                 api_key=settings.openai_api_key,
             )
-        elif settings.llm_provider == "anthropic":
-            # For future implementation
-            raise NotImplementedError("Anthropic provider not yet implemented")
-        elif settings.llm_provider == "huggingface":
-            logger.info(
-                "Initializing HuggingFace LLM",
-                model=settings.llm_model,
-                temperature=settings.llm_temperature,
-            )
-            # Initialize HuggingFace InferenceClient
+        elif provider == "huggingface":
             return InferenceClient(token=settings.hf_api_token)
-        elif settings.llm_provider == "ollama":
-            logger.info(
-                "Initializing Ollama LLM",
-                model=settings.llm_model,
-                base_url=settings.ollama_base_url,
+        elif provider == "ollama":
+            return httpx.AsyncClient(
+                base_url=settings.ollama_base_url, timeout=settings.llm_timeout
             )
-            # For Ollama, we'll use httpx client directly
-            return httpx.AsyncClient(base_url=settings.ollama_base_url, timeout=60.0)
+        elif provider == "anthropic":
+            raise NotImplementedError("Anthropic provider not yet implemented.")
         else:
-            raise ValueError(f"Unknown LLM provider: {settings.llm_provider}")
+            raise ValueError(f"Unknown LLM provider configured: '{provider}'")
 
     @retry(
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(settings.max_retries),
         wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception_type((TimeoutError, ConnectionError)),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError)),
         reraise=True,
     )
     async def _call_llm_with_retry(self, messages: list[Any]) -> str:
         """
-        Call LLM with retry logic.
+        Calls the configured LLM with a list of messages, with retry logic.
+
+        This method sends the request to the appropriate LLM provider API. It is
+        decorated with `tenacity.retry` to automatically handle transient network
+        issues like timeouts or connection errors by retrying the call with
+        exponential backoff.
 
         Args:
-            messages: List of chat messages
+            messages: A list of message objects compatible with the LLM provider
+                      (e.g., `SystemMessage`, `HumanMessage` for LangChain).
 
         Returns:
-            LLM response text
+            The raw string content of the LLM's response.
 
         Raises:
-            LLMTimeoutError: If request times out
-            LLMServiceError: If LLM service fails
+            LLMTimeoutError: If the request to the LLM times out after all retries.
+            LLMServiceError: For any other non-transient API error from the LLM.
         """
-        try:
-            if settings.llm_provider == "huggingface":
-                # For HuggingFace, convert messages to a single prompt
-                prompt = ""
-                for msg in messages:
-                    if isinstance(msg, SystemMessage):
-                        prompt += f"System: {msg.content}\n\n"
-                    elif isinstance(msg, HumanMessage):
-                        prompt += f"User: {msg.content}\n"
+        provider = settings.llm_provider
+        logger.debug("Calling LLM provider", provider=provider)
 
-                # Call HuggingFace API
+        try:
+            if provider == "openai":
+                response = await self.llm.ainvoke(messages)
+                return response.content
+            elif provider == "huggingface":
+                prompt = self.prompt_builder.messages_to_prompt(messages)
                 response = self.llm.text_generation(
                     prompt,
                     model=settings.llm_model,
@@ -103,16 +130,11 @@ class ClassifierService:
                     temperature=settings.llm_temperature,
                 )
                 return response
-            elif settings.llm_provider == "ollama":
-                # For Ollama, format messages for chat API
-                ollama_messages = []
-                for msg in messages:
-                    if isinstance(msg, SystemMessage):
-                        ollama_messages.append({"role": "system", "content": msg.content})
-                    elif isinstance(msg, HumanMessage):
-                        ollama_messages.append({"role": "user", "content": msg.content})
-
-                # Call Ollama chat API
+            elif provider == "ollama":
+                ollama_messages = [
+                    {"role": "system" if isinstance(msg, SystemMessage) else "user", "content": msg.content}
+                    for msg in messages
+                ]
                 response = await self.llm.post(
                     "/api/chat",
                     json={
@@ -122,148 +144,108 @@ class ClassifierService:
                         "options": {
                             "temperature": settings.llm_temperature,
                             "num_predict": settings.llm_max_tokens,
-                        }
-                    }
+                        },
+                    },
                 )
                 response.raise_for_status()
-                result = response.json()
-                return result["message"]["content"]
-            else:
-                # For OpenAI/Anthropic, use langchain's ainvoke
-                response = await self.llm.ainvoke(messages)
-                return response.content
-        except TimeoutError as e:
-            logger.error("LLM request timed out", error=str(e))
-            raise LLMTimeoutError("LLM request timed out") from e
+                return response.json()["message"]["content"]
+        except httpx.TimeoutException as e:
+            logger.error("LLM request timed out", provider=provider, error=e)
+            raise LLMTimeoutError(f"Request to {provider} timed out.") from e
         except Exception as e:
-            logger.error("LLM service error", error=str(e), exc_info=True)
-            raise LLMServiceError(f"LLM service failed: {str(e)}") from e
+            logger.error("LLM service error", provider=provider, error=e, exc_info=True)
+            raise LLMServiceError(f"An error occurred with the {provider} API: {e}") from e
 
-    def _parse_llm_response(self, response: str) -> ClassificationResult:
+        return ""  # Should not be reached
+
+    def _parse_llm_response(self, response_text: str) -> ClassificationResult:
         """
-        Parse LLM response into ClassificationResult.
+        Parses the raw JSON string from the LLM into a ClassificationResult object.
+
+        This method is responsible for cleaning the LLM's output, which may include
+        markdown code blocks, and then parsing it as JSON. It performs validation
+        to ensure the required fields (`category`, `sentiment`) are present and
+        that their values are valid enum members.
+
+        If parsing or validation fails, it logs a warning and falls back to a
+        default classification (`Técnico`, `Neutral`) to ensure the system
+        remains resilient.
 
         Args:
-            response: Raw LLM response
+            response_text: The raw string response from the LLM.
 
         Returns:
-            ClassificationResult
+            A `ClassificationResult` object containing the parsed category,
+            sentiment, and confidence score.
 
         Raises:
-            LLMParseError: If response cannot be parsed
+            LLMParseError: If an unexpected error occurs during parsing, though
+                           most common errors are handled gracefully with a fallback.
         """
+        logger.debug("Parsing LLM response", response_text=response_text)
         try:
-            # Remove markdown code blocks if present
-            cleaned = response.strip()
-            if cleaned.startswith("```"):
-                # Extract content between code blocks
-                parts = cleaned.split("```")
-                if len(parts) >= 2:
-                    cleaned = parts[1]
-                    if cleaned.startswith("json"):
-                        cleaned = cleaned[4:]
+            # Clean the response by removing markdown and stripping whitespace
+            cleaned_text = response_text.strip().removeprefix("```json").removesuffix("```").strip()
 
-            cleaned = cleaned.strip()
+            data = json.loads(cleaned_text)
 
-            # Parse JSON
-            data = json.loads(cleaned)
-
-            # Validate required fields
             if "category" not in data or "sentiment" not in data:
                 logger.warning(
-                    "LLM response missing required fields",
-                    response=response,
-                    parsed_data=data,
+                    "LLM response missing required fields, using fallback.",
+                    response_data=data,
                 )
-                raise LLMParseError("Missing required fields in LLM response")
+                return self._default_classification()
 
-            # Validate enum values
-            try:
-                category = TicketCategory(data["category"])
-            except ValueError:
-                logger.warning(
-                    "Invalid category in LLM response",
-                    category=data["category"],
-                    valid_categories=[c.value for c in TicketCategory],
-                )
-                category = TicketCategory.TECNICO  # Default fallback
-
-            try:
-                sentiment = TicketSentiment(data["sentiment"])
-            except ValueError:
-                logger.warning(
-                    "Invalid sentiment in LLM response",
-                    sentiment=data["sentiment"],
-                    valid_sentiments=[s.value for s in TicketSentiment],
-                )
-                sentiment = TicketSentiment.NEUTRAL  # Default fallback
-
-            confidence_score = data.get("confidence_score")
+            # Safely create enums with a fallback to default values
+            category = self._get_enum_member(TicketCategory, data["category"], TicketCategory.TECNICO)
+            sentiment = self._get_enum_member(TicketSentiment, data["sentiment"], TicketSentiment.NEUTRAL)
 
             return ClassificationResult(
                 category=category,
                 sentiment=sentiment,
-                confidence_score=confidence_score,
+                confidence_score=data.get("confidence_score"),
             )
-
-        except json.JSONDecodeError as e:
-            logger.error(
-                "Failed to parse LLM response as JSON",
-                response=response,
-                error=str(e),
+        except json.JSONDecodeError:
+            logger.warning(
+                "Failed to decode JSON from LLM response, using fallback.",
+                response_text=response_text,
             )
-            # Return default fallback
-            logger.info("Using default fallback classification")
-            return ClassificationResult(
-                category=TicketCategory.TECNICO,
-                sentiment=TicketSentiment.NEUTRAL,
-                confidence_score=None,
-            )
+            return self._default_classification()
         except Exception as e:
-            logger.error(
-                "Unexpected error parsing LLM response",
-                response=response,
-                error=str(e),
-                exc_info=True,
-            )
-            raise LLMParseError(f"Failed to parse LLM response: {str(e)}") from e
+            logger.error("Unexpected error parsing LLM response", error=e, exc_info=True)
+            raise LLMParseError(f"An unexpected error occurred while parsing: {e}") from e
 
-    async def classify_ticket(
-        self, description: str, max_retries: int = 3, timeout_seconds: float = 10.0
-    ) -> ClassificationResult:
+    async def classify_ticket(self, description: str) -> ClassificationResult:
         """
-        Classify a ticket using LLM.
+        Classifies a given support ticket description.
+
+        This is the main public method of the service. It orchestrates the
+        entire classification process:
+        1. Builds the system and user prompts.
+        2. Calls the LLM with retry logic.
+        3. Parses the response.
+        4. Returns the final classification result.
 
         Args:
-            description: Ticket text content
-            max_retries: Number of retry attempts (currently uses global config)
-            timeout_seconds: Request timeout (currently uses global config)
+            description: The text content of the support ticket to be classified.
 
         Returns:
-            ClassificationResult with category and sentiment
+            A `ClassificationResult` object with the ticket's category and sentiment.
 
         Raises:
-            LLMServiceError: If classification fails after retries
-            LLMTimeoutError: If request exceeds timeout
+            LLMServiceError: If the classification fails due to persistent API errors.
+            LLMTimeoutError: If the API request times out.
         """
-        logger.info("Starting ticket classification", description_length=len(description))
+        logger.info("Classifying ticket", description_length=len(description))
 
         try:
-            # Build messages for chat model
             messages = [
                 SystemMessage(content=self.prompt_builder.system_message),
-                HumanMessage(
-                    content=self.prompt_builder.build_classification_prompt(description)
-                ),
+                HumanMessage(content=self.prompt_builder.build_classification_prompt(description)),
             ]
 
-            # Call LLM with retry logic
-            response = await self._call_llm_with_retry(messages)
-
-            logger.debug("LLM response received", response=response)
-
-            # Parse response
-            result = self._parse_llm_response(response)
+            raw_response = await self._call_llm_with_retry(messages)
+            result = self._parse_llm_response(raw_response)
 
             logger.info(
                 "Ticket classified successfully",
@@ -271,16 +253,30 @@ class ClassifierService:
                 sentiment=result.sentiment.value,
                 confidence=result.confidence_score,
             )
-
             return result
-
         except (LLMTimeoutError, LLMServiceError):
-            # Re-raise known LLM errors
-            raise
+            logger.error("Classification failed due to LLM error.")
+            raise  # Re-raise the original, specific exception
         except Exception as e:
-            logger.error(
-                "Unexpected error during classification",
-                error=str(e),
-                exc_info=True,
+            logger.error("An unexpected error occurred during classification", error=e, exc_info=True)
+            raise LLMServiceError(f"An unexpected error occurred: {e}") from e
+
+    def _default_classification(self) -> ClassificationResult:
+        """Returns a default classification result as a fallback."""
+        return ClassificationResult(
+            category=TicketCategory.TECNICO,
+            sentiment=TicketSentiment.NEUTRAL,
+        )
+
+    def _get_enum_member(self, enum_class, value, default):
+        """Safely gets an enum member, falling back to a default if invalid."""
+        try:
+            return enum_class(value)
+        except ValueError:
+            logger.warning(
+                "Invalid enum value received, using default.",
+                invalid_value=value,
+                enum_class=enum_class.__name__,
+                default_value=default.value,
             )
-            raise LLMServiceError(f"Classification failed: {str(e)}") from e
+            return default
