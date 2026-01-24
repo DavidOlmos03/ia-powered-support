@@ -31,8 +31,12 @@ RUN useradd -m -u 1000 appuser
 # Copy Python dependencies from builder to appuser's home
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
-# Copy application code
+# Copy application code and startup script
 COPY --chown=appuser:appuser ./app ./app
+COPY --chown=appuser:appuser ./start.sh ./start.sh
+
+# Make startup script executable
+RUN chmod +x ./start.sh
 
 # Switch to non-root user
 USER appuser
@@ -43,6 +47,5 @@ ENV PATH=/home/appuser/.local/bin:$PATH
 # Expose port (Railway uses PORT env var dynamically)
 EXPOSE 8000
 
-# Run application
-# Use shell form to allow PORT environment variable expansion
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Run application using startup script
+CMD ["./start.sh"]
