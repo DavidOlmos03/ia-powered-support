@@ -254,7 +254,7 @@ Contributions are welcome! Please:
 
 ## 📄 License
 
-MIT License - See [LICENSE](LICENSE) file for details
+GPL-3.0 license - See [LICENSE](LICENSE) file for details
 
 ---
 
