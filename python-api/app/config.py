@@ -79,7 +79,7 @@ class Settings(BaseSettings):
 
     # CORS Configuration
     cors_origins: list[str] = Field(
-        default=["http://localhost:3000", "http://localhost:5173"],
+        default=["http://localhost:3000", "http://localhost:5173", "https://ia-powered-support.vercel.app"],
         description="Allowed CORS origins",
     )
 
